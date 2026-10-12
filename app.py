@@ -87,18 +87,18 @@ HTML = """
             </div>
         {% endif %}
 
-        {% for r in resultados %}
-            <div class="resultado">
-                <img src="{{ r.cover }}" alt="cover">
-                <div>
-                    <h3>{{ r.titulo }}</h3>
-                    <p>{{ r.artista }}</p>
-                    <a href="{{ r.link }}" target="_blank">▶ Escuchar</a>
+        {% if resultados %}
+            {% for r in resultados %}
+                <div class="resultado">
+                    <img src="{{ r.cover }}" alt="cover">
+                    <div>
+                        <h3>{{ r.titulo }}</h3>
+                        <p>{{ r.artista }}</p>
+                        <a href="{{ r.link }}" target="_blank">▶ Escuchar</a>
+                    </div>
                 </div>
-            </div>
-        {% endfor %}
-
-        {% if resultados is not none and resultados|length == 0 %}
+            {% endfor %}
+        {% elif resultados is not none and resultados|length == 0 %}
             <p>😔 No encontramos nada. Prueba con otra descripción.</p>
         {% endif %}
 
@@ -159,7 +159,7 @@ def inicio():
     if client is None:
         aviso = "No hay clave válida de OpenAI en .env — la búsqueda usará el texto directo."
     return render_template_string(
-        HTML, resultados=None, q="", interpretacion=None, aviso=aviso
+        HTML, resultados=[], q="", interpretacion=None, aviso=aviso
     )
 
 
@@ -168,7 +168,7 @@ def buscar():
     q = request.args.get("q", "").strip()
     if not q:
         return render_template_string(
-            HTML, resultados=None, q="", interpretacion=None, aviso=None
+            HTML, resultados=[], q="", interpretacion=None, aviso=None
         )
 
     query_ia = interpretar_con_ia(q)
@@ -184,4 +184,5 @@ def buscar():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
