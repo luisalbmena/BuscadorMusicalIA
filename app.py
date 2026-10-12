@@ -3,6 +3,7 @@ import requests
 from flask import Flask, render_template_string, request
 from dotenv import load_dotenv
 from openai import OpenAI
+import yt_dlp
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -29,7 +30,7 @@ HTML = """
         }
         h1 { font-size: 35px; color: #b69cff; }
         p { color: #b8b8c9; }
-        .contenedor { max-width: 600px; margin: 45px auto; }
+        .contenedor { max-width: 700px; margin: 45px auto; }
         input {
             box-sizing: border-box; width: 100%; padding: 16px;
             border: 1px solid #45455e; border-radius: 12px;
@@ -46,13 +47,10 @@ HTML = """
         .resultado {
             background: #1c1c2b; border-radius: 12px;
             padding: 15px; margin-top: 15px;
-            display: flex; align-items: center; gap: 15px;
             text-align: left;
         }
-        .resultado img { width: 60px; height: 60px; border-radius: 8px; }
-        .resultado a { color: #b69cff; text-decoration: none; }
         .resultado h3 { margin: 0 0 5px 0; font-size: 16px; }
-        .resultado p { margin: 0; font-size: 13px; }
+        .resultado p { margin: 0 0 10px 0; font-size: 13px; color: #b8b8c9; }
         .interpretacion {
             background: #232336; border-radius: 10px;
             padding: 12px; margin-bottom: 20px;
@@ -63,6 +61,37 @@ HTML = """
             padding: 12px; border-radius: 10px;
             margin-bottom: 20px; font-size: 14px;
         }
+        .video-wrapper {
+            position: relative;
+            padding-bottom: 56.25%;
+            height: 0;
+            overflow: hidden;
+            border-radius: 10px;
+            background: #000;
+        }
+        .video-wrapper iframe {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            border: none;
+        }
+        .badge {
+            display: inline-block;
+            background: #8b5cf6;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+        .yt-link {
+            display: inline-block;
+            margin-top: 10px;
+            color: #b69cff;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .yt-link:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -90,12 +119,20 @@ HTML = """
         {% if resultados %}
             {% for r in resultados %}
                 <div class="resultado">
-                    <img src="{{ r.cover }}" alt="cover">
-                    <div>
-                        <h3>{{ r.titulo }}</h3>
-                        <p>{{ r.artista }}</p>
-                        <a href="{{ r.link }}" target="_blank">▶ Escuchar</a>
+                    <span class="badge">▶️ Reproducir aquí</span>
+                    <h3>{{ r.titulo }}</h3>
+                    <p>📺 {{ r.artista }}</p>
+                    <div class="video-wrapper">
+                        <iframe
+                            src="https://www.youtube-nocookie.com/embed/{{ r.video_id }}"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowfullscreen
+                            loading="lazy">
+                        </iframe>
                     </div>
+                    <a class="yt-link" href="https://www.youtube.com/watch?v={{ r.video_id }}" target="_blank">
+                        🔗 Si no se reproduce aquí, verlo en YouTube
+                    </a>
                 </div>
             {% endfor %}
         {% elif resultados is not none and resultados|length == 0 %}
@@ -112,7 +149,6 @@ HTML = """
 def interpretar_con_ia(texto_usuario):
     """Usa GPT para convertir la descripción en una query de búsqueda."""
     if client is None:
-        # Sin clave válida: usar el texto tal cual
         return texto_usuario
     try:
         respuesta = client.chat.completions.create(
@@ -121,7 +157,8 @@ def interpretar_con_ia(texto_usuario):
                 {"role": "system", "content":
                     "Eres un asistente musical. El usuario describe una canción "
                     "que recuerda vagamente. Devuelve SOLO una consulta corta "
-                    "(máximo 6 palabras) para buscar en una API de música. "
+                    "(máximo 6 palabras) para buscar en YouTube. "
+                    "Añade al final la palabra 'audio' si no se especifica. "
                     "No añadas explicaciones ni comillas."},
                 {"role": "user", "content": texto_usuario}
             ],
@@ -134,22 +171,61 @@ def interpretar_con_ia(texto_usuario):
         return texto_usuario
 
 
-def buscar_en_deezer(query, limite=5):
-    url = "https://api.deezer.com/search"
+def buscar_en_youtube(query, limite=10):
+    """
+    Busca videos en YouTube evitando videos no embebibles.
+    Añade 'audio lyrics' al query para traer versiones que sí funcionan.
+    """
+    # Truco: buscar audio/lyrics en vez de video oficial (suele bloquear embed)
+    query_mejorada = f"{query} audio lyrics"
+
+    opciones = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "ignoreerrors": True,
+    }
     try:
-        r = requests.get(url, params={"q": query, "limit": limite}, timeout=10)
-        data = r.json()
-        return [
-            {
-                "titulo": item["title"],
-                "artista": item["artist"]["name"],
-                "cover": item["album"]["cover_medium"],
-                "link": item["link"],
-            }
-            for item in data.get("data", [])
-        ]
+        with yt_dlp.YoutubeDL(opciones) as ydl:
+            info = ydl.extract_info(
+                f"ytsearch{limite}:{query_mejorada}",
+                download=False
+            )
+            if not info or "entries" not in info:
+                return []
+
+            resultados = []
+            vistos = set()  # evitar duplicados
+
+            for video in info.get("entries", []):
+                if not video:
+                    continue
+
+                video_id = video.get("id")
+                titulo = video.get("title", "Sin título")
+                canal = video.get("uploader") or video.get("channel", "Desconocido")
+
+                if not video_id or video_id in vistos:
+                    continue
+
+                # Filtrar canales que bloquean embed (VEVO principalmente)
+                if "VEVO" in canal.upper():
+                    continue
+
+                vistos.add(video_id)
+                resultados.append({
+                    "titulo": titulo,
+                    "artista": canal,
+                    "video_id": video_id,
+                })
+
+                if len(resultados) >= 4:
+                    break
+
+            return resultados
     except Exception as e:
-        print("Error Deezer:", e)
+        print("Error YouTube:", e)
         return []
 
 
@@ -159,7 +235,7 @@ def inicio():
     if client is None:
         aviso = "No hay clave válida de OpenAI en .env — la búsqueda usará el texto directo."
     return render_template_string(
-        HTML, resultados=[], q="", interpretacion=None, aviso=aviso
+        HTML, resultados=None, q="", interpretacion=None, aviso=aviso
     )
 
 
@@ -168,11 +244,11 @@ def buscar():
     q = request.args.get("q", "").strip()
     if not q:
         return render_template_string(
-            HTML, resultados=[], q="", interpretacion=None, aviso=None
+            HTML, resultados=None, q="", interpretacion=None, aviso=None
         )
 
     query_ia = interpretar_con_ia(q)
-    resultados = buscar_en_deezer(query_ia)
+    resultados = buscar_en_youtube(query_ia)
 
     return render_template_string(
         HTML,
